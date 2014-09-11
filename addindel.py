@@ -92,7 +92,7 @@ def countBaseAtPos(bamfile,chrom,pos,mutid='null'):
     return bases
 
 
-def mergebams(bamlist, outbamfn, maxopen=1000):
+def mergebams(bamlist, outbamfn, maxopen=1000, debug=False):
     """ call samtools to merge two .bams
     """
 
@@ -138,15 +138,17 @@ def mergebams(bamlist, outbamfn, maxopen=1000):
 
         for submergefn in merge_sublists.keys():
             if os.path.exists(submergefn):
-                os.remove(submergefn)
+                if not debug:
+                    os.remove(submergefn)
 
     for bamfile in bamlist:
         if os.path.exists(bamfile):
-            os.remove(bamfile)
-            os.remove(bamfile + '.bai')
+            if not debug:
+                os.remove(bamfile)
+                os.remove(bamfile + '.bai')
 
 
-def remap_paired(bamfn, threads, bwaref, mutid='null'):
+def remap_paired(bamfn, threads, bwaref, mutid='null', debug=False):
     """ call bwa/samtools to remap .bam
     """
     sai1fn = bamfn + ".1.sai"
@@ -180,12 +182,13 @@ def remap_paired(bamfn, threads, bwaref, mutid='null'):
     subprocess.call(indexargs)
 
     # cleanup
-    os.remove(sai1fn)
-    os.remove(sai2fn)
-    os.remove(samfn)
+    if not debug:
+        os.remove(sai1fn)
+        os.remove(sai2fn)
+        os.remove(samfn)
 
 
-def remap_single(bamfn, threads, bwaref, mutid='null'):
+def remap_single(bamfn, threads, bwaref, mutid='null', debug=False):
     """ call bwa/samtools to remap .bam
     """
     saifn = bamfn + ".sai"
@@ -215,12 +218,13 @@ def remap_single(bamfn, threads, bwaref, mutid='null'):
     subprocess.call(indexargs)
 
     # cleanup
-    os.remove(saifn)
-    os.remove(samfn)
+    if not debug:
+        os.remove(saifn)
+        os.remove(samfn)
 
 ############
 
-def remap_bwamem(bamfn, threads, bwaref, samtofastq, mutid='null', paired=True):
+def remap_bwamem(bamfn, threads, bwaref, samtofastq, mutid='null', paired=True, debug=False):
     """ call bwa mem and samtools to remap .bam
     """
     assert os.path.exists(samtofastq)
@@ -278,10 +282,11 @@ def remap_bwamem(bamfn, threads, bwaref, samtofastq, mutid='null', paired=True):
         raise ValueError("ERROR\t" + now() + "\t" + mutid + "\tbam readcount < fastq readcount, alignment sanity check failed!\n")
 
     sys.stdout.write("INFO\t" + now() + "\t" + mutid + "\tremoving " + fastq + "\n")
-    os.remove(fastq)
+    if not debug:
+        os.remove(fastq)
 
 
-def remap_novoalign(bamfn, threads, bwaref, samtofastq, novoref, mutid='null', paired=True):
+def remap_novoalign(bamfn, threads, bwaref, samtofastq, novoref, mutid='null', paired=True, debug=False):
     """ call novoalign and samtools to remap .bam
     """
     assert os.path.exists(samtofastq)
@@ -344,10 +349,12 @@ def remap_novoalign(bamfn, threads, bwaref, samtofastq, novoref, mutid='null', p
     if paired:
         for fq in fastq:
             sys.stdout.write("INFO\t" + now() + "\t" + mutid + "\tremoving " + fq + "\n")
-            os.remove(fq)
+            if not debug:
+                os.remove(fq)
     else:
         sys.stdout.write("INFO\t" + now() + "\t" + mutid + "\tremoving " + fastq + "\n")
-        os.remove(fastq)
+        if not debug:
+            os.remove(fastq)
 
 
 def bamtofastq(bam, samtofastq, threads=1, paired=True, twofastq=False):
@@ -555,7 +562,8 @@ def makemut(args, chrom, start, end, vaf, ins, avoid):
                 for pread in pcol.pileups:
                     if avoid is not None and pread.alignment.qname in avoid:
                         print "WARN\t" + now() + "\t" + mutid + "\tdropped mutation due to read in --avoidlist", pread.alignment.qname
-                        os.remove(tmpoutbamname)
+                        if not args.debug:
+                            os.remove(tmpoutbamname)
                         return None
                     if not pread.alignment.is_secondary: # only consider primary alignments
                         basepile += pread.alignment.seq[pread.qpos-1]
@@ -583,7 +591,8 @@ def makemut(args, chrom, start, end, vaf, ins, avoid):
                                         sys.stderr.write("WARN\t" + now() + "\t" + mutid + "\twarning: no mate for " + pread.alignment.qname + "\n")
                                         if args.requirepaired:
                                             print "WARN\t" + now() + "\t" + mutid + "\tskipped mutation due to --requirepaired"
-                                            os.remove(tmpoutbamname)
+                                            if not args.debug:
+                                                os.remove(tmpoutbamname)
                                             return None
 
                                 mutmates[extqname] = mate
@@ -595,7 +604,8 @@ def makemut(args, chrom, start, end, vaf, ins, avoid):
                             if len(mutreads) > 200: # FIXME maxdepth should be a parameter
                                 sys.stderr.write("WARN\t" + now() + "\t" + mutid + "\tdepth at site is greater than cutoff, aborting mutation.\n")
                                 outbam_muts.close()
-                                os.remove(tmpoutbamname)
+                                if not args.debug:
+                                    os.remove(tmpoutbamname)
                                 return None
 
                 # make sure region doesn't have any changes that are likely SNPs
@@ -630,7 +640,8 @@ def makemut(args, chrom, start, end, vaf, ins, avoid):
         if len(readlist) < int(args.mindepth):
             sys.stderr.write("WARN\t" + now() + "\t" + mutid + "\tskipped, too few reads in region: " + str(len(readlist)) + "\n")
             outbam_muts.close()
-            os.remove(tmpoutbamname)
+            if not args.debug:
+                os.remove(tmpoutbamname)
             return None
 
         if vaf is None:
@@ -658,7 +669,8 @@ def makemut(args, chrom, start, end, vaf, ins, avoid):
                 sys.stdout.write("WARN\t" + now() + "\t" + mutid + "\tforced " + str(lastread) + " reads.\n")
             else:
                 print "WARN\t" + now() + "\t" + mutid + "\tdropped site with fewer reads than --minmutreads"
-                os.remove(tmpoutbamname)
+                if not args.debug:
+                    os.remove(tmpoutbamname)
                 return None
 
         readlist = readlist[0:lastread] 
@@ -689,18 +701,18 @@ def makemut(args, chrom, start, end, vaf, ins, avoid):
             outbam_muts.close()
             if args.single:
                 if args.bwamem:
-                    remap_bwamem(tmpoutbamname, 1, args.refFasta, args.samtofastq, mutid=mutid, paired=False)
+                    remap_bwamem(tmpoutbamname, 1, args.refFasta, args.samtofastq, mutid=mutid, paired=False, debug=args.debug)
                 elif args.novoalign:
-                    remap_novoalign(tmpoutbamname, 1, args.refFasta, args.samtofastq, args.novoref, mutid=mutid, paired=False)
+                    remap_novoalign(tmpoutbamname, 1, args.refFasta, args.samtofastq, args.novoref, mutid=mutid, paired=False, debug=args.debug)
                 else:
-                    remap_single(tmpoutbamname, 1, args.refFasta, mutid=mutid)
+                    remap_single(tmpoutbamname, 1, args.refFasta, mutid=mutid, debug=args.debug)
             else:
                 if args.bwamem:
-                    remap_bwamem(tmpoutbamname, 1, args.refFasta, args.samtofastq, mutid=mutid, paired=True)
+                    remap_bwamem(tmpoutbamname, 1, args.refFasta, args.samtofastq, mutid=mutid, paired=True, debug=args.debug)
                 elif args.novoalign:
-                    remap_novoalign(tmpoutbamname, 1, args.refFasta, args.samtofastq, args.novoref, mutid=mutid, paired=True)
+                    remap_novoalign(tmpoutbamname, 1, args.refFasta, args.samtofastq, args.novoref, mutid=mutid, paired=True, debug=args.debug)
                 else:
-                    remap_paired(tmpoutbamname, 1, args.refFasta, mutid=mutid)
+                    remap_paired(tmpoutbamname, 1, args.refFasta, mutid=mutid, debug=args.debug)
 
             outbam_muts = pysam.Samfile(tmpoutbamname,'rb')
             coverwindow = 1
@@ -726,9 +738,11 @@ def makemut(args, chrom, start, end, vaf, ins, avoid):
                 log.write("\t".join(("indel",indelstr,str(mutpos),mutstr,str(avgincover),str(avgoutcover),str(spikein_frac),str(maxfrac)))+"\n")
             else:
                 outbam_muts.close()
-                os.remove(tmpoutbamname)
+                if not args.debug:    
+                    os.remove(tmpoutbamname)
                 if os.path.exists(tmpoutbamname + '.bai'):
-                    os.remove(tmpoutbamname + '.bai')
+                    if not args.debug:
+                        os.remove(tmpoutbamname + '.bai')
                 return None
 
         outbam_muts.close()
@@ -743,9 +757,11 @@ def makemut(args, chrom, start, end, vaf, ins, avoid):
         traceback.print_exc(file=sys.stdout)
         sys.stderr.write("*"*60 + "\n")
         if os.path.exists(tmpoutbamname):
-            os.remove(tmpoutbamname)
+            if not args.debug:
+                os.remove(tmpoutbamname)
         if os.path.exists(tmpoutbamname + '.bai'):
-            os.remove(tmpoutbamname + '.bai')
+            if not args.debug:
+                os.remove(tmpoutbamname + '.bai')
         return None
 
 
@@ -828,16 +844,17 @@ def main(args):
     if len(tmpbams) == 1:
         os.rename(tmpbams[0],outbam_mutsfile)
     elif len(tmpbams) > 1:
-        mergebams(tmpbams,outbam_mutsfile,maxopen=int(args.maxopen))
+        mergebams(tmpbams,outbam_mutsfile,maxopen=int(args.maxopen), debug=args.debug)
 
     bedfile.close()
 
     # cleanup
-    for bam in tmpbams:
-        if os.path.exists(bam):
-            os.remove(bam)
-        if os.path.exists(bam + '.bai'):
-            os.remove(bam + '.bai')
+    if not args.debug:
+        for bam in tmpbams:
+            if os.path.exists(bam):
+                os.remove(bam)
+            if os.path.exists(bam + '.bai'):
+                os.remove(bam + '.bai')
 
     if args.skipmerge:
         print "INFO\t" + now() + "\tskipping merge, plase merge reads from", outbam_mutsfile, "manually."
@@ -846,6 +863,7 @@ def main(args):
         replace(args.bamFileName, outbam_mutsfile, args.outBamFile)
 
         #cleanup
+    if not args.debug:
         os.remove(outbam_mutsfile)
     
 def run():
@@ -876,6 +894,7 @@ def run():
     parser.add_argument('--novoref', default=None, help='novoalign reference, must be specified with --novoalign')
     parser.add_argument('--skipmerge', action='store_true', default=False, help="final output is tmp file to be merged")
     parser.add_argument('--tmpdir', default='addindel.tmp', help='temporary directory (default=addindel.tmp)')
+    parser.add_argument('--debug', action='store_true', default=False, help="do not delete temporary files")
     args = parser.parse_args()
     main(args)
 
