@@ -114,6 +114,102 @@ def makedel(read, chrom, start, end, ref, debug=False):
         print "DEBUG: DEL:  newseq:     ", left + right
     return left + right
 
+
+class ReadPair:
+    def __init__(self, read):
+        assert not pread.alignment.is_secondary and bin(pread.alignment.flag & 2048) != bin(2048), "cannot process non-primary alignments!"
+        self.read1 = None
+        self.read2 = None
+
+        if read.is_read1:
+            self.read1 = read
+        elif read.is_read2:
+            self.read2 = read
+        else:
+            raise ValueError("encountered read " + self.name + " without is_read1 or is_read2 set!")
+
+        self.name = read.qname
+
+    def is_paired(self):
+        return self.read1 is not None and self.read2 is not None
+
+    def addmate(self, read):
+        if read.is_read1:
+            assert self.read1 is None, "encountered two read #1s for " + self.name
+            self.read1 = read
+
+        elif read.is_read2:
+            assert self.read2 is None, "encountered two read #2s for " + self.name
+            self.read2 = read
+
+        else:
+            raise ValueError("encountered read " + self.name + " without is_read1 or is_read2 set!")
+
+
+class Mutation:
+    def __init__(self, args, log, bamfile, bammate, chrom, mutstart, mutend, mutpos_list):
+        self.args        = args
+        self.log         = log
+        self.bamfile     = bamfile
+        self.bammate     = bammate
+        self.chrom       = chrom
+        self.mutstart    = mutstart
+        self.mutend      = mutend
+        self.mutpos_list = mutpos_list # assume all on the same chromosome
+        self.failed      = False       # flag for rejecting mutations
+
+        assert mutend > mutstart, "mutation start must occur before mutation end: " + mutid
+
+        self.region = 'haplo_' + chrom + '_' + str(self.mutstart) + '_' + str(self.mutend)
+
+        self.readpairs = {}
+
+        #self.outreads = {}
+        #self.mutreads = {}
+        #self.mutmates = {}
+
+        # args not necessarily used by both mutation modes
+
+        self.avoid        = None
+        self.mutid_list   = None
+        self.is_snv       = False
+        self.mutbase_list = None
+        self.is_insertion = False
+        self.is_deletion  = False
+        self.ins_seq      = None
+        self.reffile      = None
+        self.indel_start  = None
+        self.indel_end    = None
+
+    def collect_reads(self):
+        ''' fetch all reads covering mutation region '''
+        for pcol in self.bamfile.pileup(reference=self.chrom, start=self.mutstart, end=self.mutend):
+            if pcol.pos:
+                for pread in pcol.pileups:
+                    if self.avoid is not None and pread.alignment.qname in self.avoid:
+                        print "WARN\t" + now() + "\t" + region + "\tdropped mutation due to read in --avoidlist", pread.alignment.qname
+                        self.failed = True
+
+                if not pread.alignment.is_secondary and bin(pread.alignment.flag & 2048) != bin(2048): # only consider primary alignments
+                    if pread.alignment.qname not in readpairs:
+                        self.readpairs[pread.alignment.qname] = ReadPair(pread.alignment)
+                    else:
+                        self.readpairs[pread.alignment.qname].addmate(pread.alignment)
+
+    def reselect_by_mutation(self, position, allele, invert=False):
+        ''' retain entries in self.readpairs having the specified mutation (position, base) '''
+        ''' invert: retain entries _without_ specified mutation '''
+        assert position >= self.mutstart and position <= self.mutend, "position " + str(position) " out of range"
+
+
+    def hanging_mates(self):
+        ''' clean up cases where mates were not in pileup '''
+        pass
+
+
+
+
+
 def mutate(args, log, bamfile, bammate, chrom, mutstart, mutend, mutpos_list, avoid=None, mutid_list=None, is_snv=False, mutbase_list=None, is_insertion=False, is_deletion=False, ins_seq=None, reffile=None, indel_start=None, indel_end=None):
     assert mutend > mutstart, "mutation start must occur before mutation end: " + mutid
 
@@ -146,6 +242,8 @@ def mutate(args, log, bamfile, bammate, chrom, mutstart, mutend, mutpos_list, av
                         if not pread.alignment.is_secondary and bin(pread.alignment.flag & 2048) != bin(2048) and not pread.alignment.mate_is_unmapped:
                             outreads[extqname] = pread.alignment
                             mutid = mutid_list[mutpos_list.index(pcol.pos)]
+
+
 
                             if is_snv:
                                 if extqname not in mutreads:
