@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 
 from common import *
+
 import subprocess
+import networkx as nx
+
+from collections import defaultdict as dd
 
 
 def countBaseAtPos(bamfile,chrom,pos,mutid='null'):
@@ -117,7 +121,7 @@ def makedel(read, chrom, start, end, ref, debug=False):
 
 class ReadPair:
     def __init__(self, read):
-        assert not pread.alignment.is_secondary and bin(pread.alignment.flag & 2048) != bin(2048), "cannot process non-primary alignments!"
+        assert not read.is_secondary and bin(read.flag & 2048) != bin(2048), "cannot process non-primary alignments!"
         self.read1 = None
         self.read2 = None
 
@@ -134,24 +138,69 @@ class ReadPair:
         return self.read1 is not None and self.read2 is not None
 
     def addmate(self, read):
-        if read.is_read1:
-            assert self.read1 is None, "encountered two read #1s for " + self.name
+        if read.is_read1 and self.read1 is None:
             self.read1 = read
 
-        elif read.is_read2:
-            assert self.read2 is None, "encountered two read #2s for " + self.name
+        elif read.is_read2 and self.read2 is None:
             self.read2 = read
 
+
+class VCFMut:
+    def __init__(self, vcfline):
+        self.vcfline = vcfline.strip()
+        chrom, pos, siteid, alt, ref, alt, qual, filt = self.vcfline.split()[:8]
+        
+        self.pos    = int(pos)
+        self.chrom  = chrom
+        self.alt    = alt.split(',')
+        self.filter = True
+
+        if filt in ('PASS', '.'):
+            self.filter=False
+
+    def in_range(self, chrom, start, end):
+        if self.chrom == chrom and start <= self.pos and end >= self.pos:
+            return True
         else:
-            raise ValueError("encountered read " + self.name + " without is_read1 or is_read2 set!")
+            return False
+
+    def __lt__(self, other):
+        if self.chrom == other.chrom:
+            return self.pos < other.pos
+        else:
+            return self.chrom < other.chrom
+
+    def __eq__(self, other):
+        return self.vcfline == other.vcfline
+
+    def __str__(self):
+        return ':'.join(self.vcfline.split()[:5])
+
+
+
+def nearest_site(chrom, pos, vcfmuts):
+    mindist = None
+    minsite = None
+
+    for mut in vcfmuts:
+        if chrom == mut.chrom:
+            if minsite is None:
+                mindist = abs(mut.pos - pos)
+                minsite = mut
+            else:
+                if abs(mut.pos - pos) < mindist:
+                    mindist = abs(mut.pos - pos)
+                    minsite = mut
+
+    return minsite
 
 
 class Mutation:
-    def __init__(self, args, log, bamfile, bammate, chrom, mutstart, mutend, mutpos_list):
+    def __init__(self, args, log, bamfile, chrom, mutstart, mutend, mutpos_list, reffile):
         self.args        = args
         self.log         = log
         self.bamfile     = bamfile
-        self.bammate     = bammate
+        self.reffile     = reffile
         self.chrom       = chrom
         self.mutstart    = mutstart
         self.mutend      = mutend
@@ -164,12 +213,6 @@ class Mutation:
 
         self.readpairs = {}
 
-        #self.outreads = {}
-        #self.mutreads = {}
-        #self.mutmates = {}
-
-        # args not necessarily used by both mutation modes
-
         self.avoid        = None
         self.mutid_list   = None
         self.is_snv       = False
@@ -177,35 +220,143 @@ class Mutation:
         self.is_insertion = False
         self.is_deletion  = False
         self.ins_seq      = None
-        self.reffile      = None
         self.indel_start  = None
         self.indel_end    = None
+
 
     def collect_reads(self):
         ''' fetch all reads covering mutation region '''
         for pcol in self.bamfile.pileup(reference=self.chrom, start=self.mutstart, end=self.mutend):
-            if pcol.pos:
-                for pread in pcol.pileups:
-                    if self.avoid is not None and pread.alignment.qname in self.avoid:
-                        print "WARN\t" + now() + "\t" + region + "\tdropped mutation due to read in --avoidlist", pread.alignment.qname
-                        self.failed = True
+            for pread in pcol.pileups:
+                if not pread.alignment.is_secondary and bin(pread.alignment.flag & 2048) != bin(2048) and not pread.alignment.mate_is_unmapped: # only consider primary alignments
 
-                if not pread.alignment.is_secondary and bin(pread.alignment.flag & 2048) != bin(2048): # only consider primary alignments
-                    if pread.alignment.qname not in readpairs:
+                    if pread.alignment.qname not in self.readpairs:
                         self.readpairs[pread.alignment.qname] = ReadPair(pread.alignment)
+
                     else:
                         self.readpairs[pread.alignment.qname].addmate(pread.alignment)
 
-    def reselect_by_mutation(self, position, allele, invert=False):
-        ''' retain entries in self.readpairs having the specified mutation (position, base) '''
+
+    def minpilepos(self):
+        startposlist = []
+        for name, rp in self.readpairs.iteritems():
+
+            if rp.read1 is not None:
+                startposlist.append(min(rp.read1.get_reference_positions()))
+
+            if rp.read2 is not None:
+                startposlist.append(min(rp.read2.get_reference_positions()))
+
+        return min(startposlist)
+
+
+    def maxpilepos(self):
+        endposlist = []
+        for name, rp in self.readpairs.iteritems():
+
+            if rp.read1 is not None:
+                endposlist.append(max(rp.read1.get_reference_positions()))
+
+            if rp.read2 is not None:
+                endposlist.append(max(rp.read2.get_reference_positions()))
+
+        return max(endposlist)
+
+
+    def reselect_by_mutation(self, invert=False):
+        ''' retain entries in self.readpairs with(out) mutation in phasevcf: if >1 mutation in region choose the first one '''
         ''' invert: retain entries _without_ specified mutation '''
-        assert position >= self.mutstart and position <= self.mutend, "position " + str(position) " out of range"
-
-
-    def hanging_mates(self):
-        ''' clean up cases where mates were not in pileup '''
         pass
 
+
+    def get_phase_sites(self, phasevcf):
+        ''' find sites in phase vcf that are best for phasing '''
+        possible_phase_sites = []
+
+        with open(phasevcf, 'r') as vcf:
+            for line in vcf:
+                if not line.startswith('#'):
+                    vcfmut = VCFMut(line)
+                    if vcfmut.in_range(self.chrom, self.minpilepos(), self.maxpilepos()):
+                        possible_phase_sites.append(vcfmut)
+
+        print "number of possible phase sites: " + str(possible_phase_sites)
+
+        nearest_phase_sites = {} # position in mutpos_list --> vcf record in phasing VCF
+        
+        # select the nearest sites to the mutation targets (1 site/target)
+        for pos in self.mutpos_list:
+            psite = nearest_site(self.chrom, pos, possible_phase_sites)
+            if self.shared_reads(pos, psite.pos) > 0:
+                nearest_phase_sites[str(psite)] = [pos, psite]
+
+        print "nearest phase sites: "
+        for rp,ns in nearest_phase_sites.iteritems():
+            print "\t" + str(rp) + "-->" + str(ns)
+
+        checked_pairs = dd(dict)
+        readshare_graph = nx.DiGraph()
+
+        phase_sites = {} # position in mutpos_list --> vcf record in phasing VCF
+
+        for sitename1 in nearest_phase_sites:
+            for sitename2 in nearest_phase_sites:
+
+                site1 = nearest_phase_sites[sitename1][1]
+                site2 = nearest_phase_sites[sitename2][1]
+
+                if site1 != site2:
+                    if (str(site1) not in checked_pairs or str(site2) not in checked_pairs[str(site1)]):
+                        if (str(site2) not in checked_pairs or str(site1) not in checked_pairs[str(site2)]):
+                            sr = self.shared_reads(site1.pos, site2.pos)
+                            print str(site1), '--', str(site2), sr
+
+                            checked_pairs[str(site1)][str(site2)] = sr
+                            if sr > 0:
+                                readshare_graph.add_edge(str(site1), str(site2), weight=sr)
+                                readshare_graph.add_edge(str(site2), str(site1), weight=sr)
+
+        # using strongly connected comp. instead of CC b/c if snpA --> snpB --> snpC
+        # and not(snpA --> snpC) then reads aren't shared btwn A and C,
+        # probably can't use one to to direct new mutation to the other
+
+        scc = list(nx.strongly_connected_components(readshare_graph))
+        print scc
+
+
+    def find_hanging_mates(self):
+        ''' clean up cases where mates were not in pileup '''
+        for readname in self.readpairs:
+            if not self.readpairs[readname].is_paired():
+
+                if self.readpairs[readname].read1 is None:
+                    self.readpairs[readname].addmate(self.bamfile.mate(self.readpairs[readname].read2))
+
+                elif self.readpairs[readname].read2 is None:
+                    self.readpairs[readname].addmate(self.bamfile.mate(self.readpairs[readname].read1))
+
+
+    def allpaired(self):
+        return (len(self.readpairs) - len([rp for rp in self.readpairs if self.readpairs[rp].is_paired()])) == 0
+
+
+    def reads_with_position(self, pos):
+        ''' return read names contatining aligned position pos '''
+        readnames = {}
+        for pcol in self.bamfile.pileup(reference=self.chrom, start=pos, end=pos+1):
+            for pread in pcol.pileups:
+                if pos in pread.alignment.get_reference_positions():
+                    readnames[pread.alignment.qname] = True
+
+        return readnames.keys()
+
+
+    def shared_reads(self, pos1, pos2):
+        ''' return number of reads shared by pair[0] and pair[1] '''
+        reads_p1 = set(self.reads_with_position(pos1))
+        reads_p2 = set(self.reads_with_position(pos2))
+
+        return len(reads_p1.intersection(reads_p2))
 
 
 
