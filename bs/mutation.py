@@ -223,6 +223,8 @@ class Mutation:
         self.indel_start  = None
         self.indel_end    = None
 
+        self.phase_sites = {} # position in mutpos_list --> vcf record in phasing VCF
+
 
     def collect_reads(self):
         ''' fetch all reads covering mutation region '''
@@ -297,8 +299,6 @@ class Mutation:
         checked_pairs = dd(dict)
         readshare_graph = nx.DiGraph()
 
-        phase_sites = {} # position in mutpos_list --> vcf record in phasing VCF
-
         for sitename1 in nearest_phase_sites:
             for sitename2 in nearest_phase_sites:
 
@@ -315,13 +315,27 @@ class Mutation:
                             if sr > 0:
                                 readshare_graph.add_edge(str(site1), str(site2), weight=sr)
                                 readshare_graph.add_edge(str(site2), str(site1), weight=sr)
+                            else:
+                                if not readshare_graph.has_node(site1):
+                                    readshare_graph.add_node(str(site1))
+                                if not readshare_graph.has_node(site2):
+                                    readshare_graph.add_node(str(site2))
 
-        # using strongly connected comp. instead of CC b/c if snpA --> snpB --> snpC
-        # and not(snpA --> snpC) then reads aren't shared btwn A and C,
+        # using strongly connected comp. instead of CC b/c if snpA <--> snpB <--> snpC
+        # and not(snpA <--> snpC) then reads aren't shared btwn A and C,
         # probably can't use one to to direct new mutation to the other
 
         scc = list(nx.strongly_connected_components(readshare_graph))
-        print scc
+        
+        # for now, select the first node in each connected component (arbitrary?)
+        # need to think about whether there's a 'best' snp for phasing multiple new mutations
+
+        for c in scc:
+            for psite in c:
+                mutpos = nearest_phase_sites[psite][0]
+                self.phase_sites[mutpos] = c[0]
+
+        print self.phase_sites
 
 
     def find_hanging_mates(self):
